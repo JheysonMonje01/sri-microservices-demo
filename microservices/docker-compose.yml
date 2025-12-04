@@ -1,0 +1,119 @@
+services:
+  auth-db:
+    image: postgres:15
+    container_name: auth-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: PONER_NOMBRE
+      POSTGRES_DB: authdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - auth_db_data:/var/lib/postgresql/data
+    networks:
+      - PONER_LA_RED
+
+  auth-ms:
+    build:
+      context: ./auth-ms
+      dockerfile: Dockerfile
+    container_name: auth-ms
+    restart: always
+    depends_on:
+      - auth-db
+      - redis
+    env_file:
+      - ./auth-ms/.env
+    ports:
+      - "3001:3000"  # HTTP
+      - "4001:4001"  # TCP
+    #command: npm run start:prod
+    volumes:
+      - ./auth-ms:/usr/src/app
+      - /usr/src/app/node_modules
+    networks:
+      - PONER_LA_RED
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: gateway
+    restart: always
+    depends_on:
+      - auth-ms
+    env_file:
+      - ./gateway/.env
+    ports:
+      - "3000:3000"
+    #command: npm run start:prod
+    volumes:
+      - ./gateway:/usr/src/app
+      - /usr/src/app/node_modules
+    networks:
+      - PONER_LA_RED
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-cache
+    restart: always
+    command: ["redis-server", "--requirepass", "AQUI_VA_LA_CLAVE_DE_CONEXION"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - PONER_LA_RED
+
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: redis-insight
+    restart: always
+    ports:
+      - "5540:5540"
+    depends_on:
+      - redis
+    environment:
+      - RI_APP_PORT=5540
+    volumes:
+      - redisinsight_data:/data
+    networks:
+      - PONER_LA_RED
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: PONER_LAS_CREDENCIALES
+      PGADMIN_DEFAULT_PASSWORD: PONER_LA_CLAVE
+    ports:
+      - "5050:80"
+    depends_on:
+      - auth-db
+    networks:
+      - PONER_LA_RED
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx_gateway
+    restart: always
+    volumes:
+      - ./gateway/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/docker/nginx/html:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - gateway
+    networks:
+      - PONER_LA_RED
+
+volumes:
+  auth_db_data:
+  redis_data:
+  redisinsight_data:
+
+networks:
+  PONER_LA_RED:
+    driver: bridge

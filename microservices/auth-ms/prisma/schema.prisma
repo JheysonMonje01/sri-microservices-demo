@@ -1,0 +1,256 @@
+// ============================================================================
+// 📌 schema.prisma — Modelo FINAL para opción A (multi-rol + multi-organización)
+// ============================================================================
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+// ============================================================================
+// 🎯 ENUMS — para mayor seguridad en roles
+// ============================================================================
+
+enum RolSistema {
+  CLIENTE_COMUN
+  CONTADOR
+  ADMIN
+}
+
+// ============================================================================
+// 🏢 MODELO: ORGANIZACIONES
+// Cada usuario posee una organización personal creada automáticamente.
+// ============================================================================
+model Organizacion {
+  id            String  @id @default(uuid())
+  nombre        String  @db.VarChar(200)
+  tipo          String  @db.VarChar(50)           // PERSONAL | EMPRESA | etc.
+  ruc           String? @db.VarChar(20)
+  direccion     String?
+  telefono      String? @db.VarChar(20)
+  emailContacto String? @map("email_contacto") @db.Text
+  activo        Boolean @default(true)
+
+  tipoEntidad String? @map("tipo_entidad") @db.VarChar(50)
+  pais        String? @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relaciones
+  roles        Rol[]
+  usuarios     UsuarioOrganizacion[]
+  invitaciones Invitacion[]
+
+  @@map("organizaciones")
+}
+
+// ============================================================================
+// 👤 MODELO: USERS — *sin rol directo*
+// Roles provienen de UsuarioOrganizacion
+// ============================================================================
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique @db.VarChar(80)
+  password  String   @map("password_hash")
+  nombre    String   @db.VarChar(150)
+  apellido  String   @db.VarChar(150)
+  telefono  String?  @db.VarChar(20)
+  activo    Boolean  @default(true)
+  
+  picture   String? @db.VarChar(500)  // 👈 CAMPO NUEVO
+  
+  metadata  Json?    @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relaciones
+  organizaciones       UsuarioOrganizacion[]
+  sesiones             Sesion[]
+  intentos             IntentoLogin[]
+  auditorias           Auditoria[]     @relation("AuditoriaUser")
+  accountLocks         BloqueoCuenta[]   @relation("BloqueoCuentaUser")
+  accountLocksCreated  BloqueoCuenta[]   @relation("BloqueoCuentaCreator")
+
+  @@map("users")
+}
+
+// ============================================================================
+// 🛂 MODELO: ROLES — almacenados por organización
+// ============================================================================
+model Rol {
+  id          String  @id @default(uuid())
+  orgId       String? @map("org_id")
+  nombre      String  @db.VarChar(100)
+  tipo        RolSistema? @default(CLIENTE_COMUN) // opcional, pero recomendado
+  descripcion String?
+  activo      Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organizacion Organizacion? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  permisos     RolPermiso[]
+  usuarios     UsuarioOrganizacion[]
+
+  @@unique([orgId, nombre])
+  @@map("roles")
+}
+
+// ============================================================================
+// 🔐 MODELO: PERMISOS — soporte para RBAC (opcional)
+// ============================================================================
+model Permiso {
+  id          String   @id @default(uuid())
+  codigo      String   @unique @db.VarChar(150)
+  descripcion String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  roles RolPermiso[]
+
+  @@map("permisos")
+}
+
+// ============================================================================
+// 🔗 ROLES_PERMISOS — relación M:N
+// ============================================================================
+model RolPermiso {
+  rolId     String
+  permisoId String
+
+  rol     Rol     @relation(fields: [rolId], references: [id], onDelete: Cascade)
+  permiso Permiso @relation(fields: [permisoId], references: [id], onDelete: Cascade)
+
+  @@id([rolId, permisoId])
+  @@map("roles_permisos")
+}
+
+// ============================================================================
+// 🔗 USUARIOS_ORGANIZACIONES — relación clave
+// ============================================================================
+model UsuarioOrganizacion {
+  usuarioId String
+  orgId     String
+  rolId     String
+
+  usuario      User         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  organizacion Organizacion @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  rol          Rol          @relation(fields: [rolId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioId, orgId, rolId])
+  @@map("usuarios_organizaciones")
+}
+
+// ============================================================================
+// 🧑‍💻 SESIONES — refresh tokens
+// ============================================================================
+model Sesion {
+  id               String    @id @default(uuid())
+  usuarioId        String    @map("usuario_id")
+  ip               String?   @db.Inet
+  userAgent        String?   @map("user_agent")
+  jwtId            String    @unique @map("jwt_id")
+  refreshTokenHash String    @map("refresh_token_hash")
+  expiraEn         DateTime  @map("expira_en")
+  revocada         Boolean   @default(false)
+  revocadaEn       DateTime? @map("revocada_en")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  usuario User @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId, expiraEn])
+  @@map("sesiones")
+}
+
+// ============================================================================
+// 🕵️ INTENTOS DE LOGIN
+// ============================================================================
+model IntentoLogin {
+  id             String   @id @default(uuid())
+  usuarioId      String?  @map("usuario_id")
+  emailIntentado String?  @map("email_intentado") @db.Text
+  ip             String?  @db.Inet
+  userAgent      String?  @map("user_agent")
+  exito          Boolean
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  usuario User? @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId, createdAt])
+  @@map("intentos_login")
+}
+
+// ============================================================================
+// 🔒 ACCOUNT LOCKS — bloqueo por seguridad
+// ============================================================================
+model BloqueoCuenta {
+  id           String   @id @default(uuid())
+  usuarioId    String?  @map("usuario_id")
+  email        String?  @db.Text
+  reason       String?  @db.VarChar(100)
+  blockedUntil DateTime @map("blocked_until")
+  createdAt    DateTime @default(now()) @map("created_at")
+  createdBy    String?  @map("created_by")
+
+  usuario   User? @relation("BloqueoCuentaUser", fields: [usuarioId], references: [id], onDelete: Cascade)
+  creadoPor User? @relation("BloqueoCuentaCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId])
+  @@index([email])
+  @@map("account_locks")
+}
+
+// ============================================================================
+// 📜 AUDITORIA — operaciones del usuario
+// ============================================================================
+model Auditoria {
+  id           BigInt   @id @default(autoincrement())
+  entidad      String   @db.VarChar(50)
+  entidadId    String?  @map("entidad_id")
+  accion       String   @db.VarChar(50)
+  detalle      Json?    @db.JsonB
+  realizadoPor String?  @map("realizado_por")
+  createdAt    DateTime @default(now()) @map("created_at")
+  firmado      Bytes?
+
+  usuario User? @relation("AuditoriaUser", fields: [realizadoPor], references: [id], onDelete: SetNull)
+
+  @@map("auditoria")
+}
+
+// ============================================================================
+// ✉️ INVITACIONES — para contadores o miembros
+// ============================================================================
+model Invitacion {
+  id     String @id @default(uuid())
+  email  String @db.Text
+  orgId  String @map("org_id")
+  token  String @unique
+  estado String @default("pendiente") @db.VarChar(20)
+  activa Boolean @default(true)
+
+  expiraEn  DateTime @map("expira_en")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organizacion Organizacion @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@map("invitaciones")
+}
+
+// ============================================================================
+// ⚙️ AUTH CONFIG
+// ============================================================================
+model AuthConfig {
+  key       String   @id
+  value     Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("auth_config")
+}
